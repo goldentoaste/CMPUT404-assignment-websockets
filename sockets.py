@@ -12,9 +12,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-#
+
+
+from typing import Dict
 import flask
-from flask import Flask, request
+from flask import Flask, request, redirect
 from flask_sockets import Sockets
 import gevent
 from gevent import queue
@@ -22,9 +24,13 @@ import time
 import json
 import os
 
+from gevent.greenlet import Greenlet
+
 app = Flask(__name__)
 sockets = Sockets(app)
 app.debug = True
+
+
 
 class World:
     def __init__(self):
@@ -59,29 +65,68 @@ class World:
     def world(self):
         return self.space
 
-myWorld = World()        
+myWorld = World()  
 
-def set_listener( entity, data ):
-    ''' do something with the update ! '''
+gevents : Dict[Greenlet] = dict()
 
-myWorld.add_set_listener( set_listener )
+
+
+class SocketListenerThing:
+
+    def __init__(self, socket: Sockets):
+        
+        self.socket :Sockets = socket 
+    
+    def __call__(self, entity : str, data : dict):
+        #do stuff here
+        global gevents
+        if self.socket.closed:
+            myWorld.listeners.remove(self)
+            if self.socket in gevents:
+                gevent.kill(gevents[self.socket])
+            print('socket is closed, remove lisntener and killing gevent')
+            return
+        print('sent')
+        self.socket.send(json.dumps({entity:data}))
+     
+    
+
         
 @app.route('/')
 def hello():
     '''Return something coherent here.. perhaps redirect to /static/index.html '''
-    return None
+    return redirect("/static/index.html", code=301)
 
-def read_ws(ws,client):
+def read_ws(ws :Sockets):
     '''A greenlet function that reads from the websocket and updates the world'''
-    # XXX: TODO IMPLEMENT ME
-    return None
+    try:
+        while True:
+            msg = ws.receive()
+            print(f'bruh {msg}')
+            if msg:
+                packet :dict = json.loads(msg)
+                
+                data : dict
+                for entity, data in packet.items():
+                    for key, val in data.items():
+                        myWorld.update(entity, key, val)
+            else:
+                break
+    except Exception as e:
+        print('oh no!',e)
+    finally:
+        global gevents
+        if ws in gevents:
+            gevent.kill(gevents[ws])
 
 @sockets.route('/subscribe')
 def subscribe_socket(ws):
     '''Fufill the websocket URL of /subscribe, every update notify the
        websocket and read updates from the websocket '''
-    # XXX: TODO IMPLEMENT ME
-    return None
+    global gevents
+    g = gevent.spawn(read_ws, ws)
+    gevents[ws] = g
+    myWorld.add_set_listener(SocketListenerThing(ws))
 
 
 # I give this to you, this is how you get the raw body/data portion of a post in flask
