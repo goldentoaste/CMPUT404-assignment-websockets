@@ -14,9 +14,8 @@
 # limitations under the License.
 
 
-from typing import Dict
 import flask
-from flask import Flask, request, redirect
+from flask import Flask, request, redirect, Response
 from flask_sockets import Sockets
 import gevent
 from gevent import queue
@@ -24,12 +23,10 @@ import time
 import json
 import os
 
-from gevent.greenlet import Greenlet
 
 app = Flask(__name__)
 sockets = Sockets(app)
 app.debug = True
-
 
 
 class World:
@@ -37,22 +34,22 @@ class World:
         self.clear()
         # we've got listeners now!
         self.listeners = list()
-        
+
     def add_set_listener(self, listener):
-        self.listeners.append( listener )
+        self.listeners.append(listener)
 
     def update(self, entity, key, value):
-        entry = self.space.get(entity,dict())
+        entry = self.space.get(entity, dict())
         entry[key] = value
         self.space[entity] = entry
-        self.update_listeners( entity )
+        self.update_listeners(entity)
 
     def set(self, entity, data):
         self.space[entity] = data
-        self.update_listeners( entity )
+        self.update_listeners(entity)
 
     def update_listeners(self, entity):
-        '''update the set listeners'''
+        """update the set listeners"""
         for listener in self.listeners:
             listener(entity, self.get(entity))
 
@@ -60,114 +57,131 @@ class World:
         self.space = dict()
 
     def get(self, entity):
-        return self.space.get(entity,dict())
-    
+        return self.space.get(entity, dict())
+
     def world(self):
         return self.space
 
-myWorld = World()  
 
-gevents : Dict[Greenlet] = dict()
-
+myWorld = World()
 
 
-class SocketListenerThing:
+class SocketClient:
+    def __init__(self, socket):
 
-    def __init__(self, socket: Sockets):
-        
-        self.socket :Sockets = socket 
-    
-    def __call__(self, entity : str, data : dict):
-        #do stuff here
-        global gevents
-        if self.socket.closed:
-            myWorld.listeners.remove(self)
-            if self.socket in gevents:
-                gevent.kill(gevents[self.socket])
-            print('socket is closed, remove lisntener and killing gevent')
-            return
-        print('sent')
-        self.socket.send(json.dumps({entity:data}))
-     
-    
+        self.socket = socket
+        self.queue = queue.Queue()
 
-        
-@app.route('/')
+    def put(self, item):
+        self.queue.put_nowait(item)
+
+    def __call__(self, entity, data):
+        self.queue.put(json.dumps({entity: data}))
+
+    # def __call__(self, entity , data ):
+    #     #do stuff here
+    #     global gevents
+
+    #     if self.socket.closed:
+    #         myWorld.listeners.remove(self)
+    #         if self.socket in gevents:
+    #             gevent.kill(gevents[self.socket])
+    #             # self.socket.close()
+    #         print('socket is closed, remove lisntener and killing gevent')
+    #         return
+    #     print('sent')
+    #     self.socket.send(json.dumps({entity:data}))
+
+
+@app.route("/")
 def hello():
-    '''Return something coherent here.. perhaps redirect to /static/index.html '''
+    """Return something coherent here.. perhaps redirect to /static/index.html"""
     return redirect("/static/index.html", code=301)
 
-def read_ws(ws :Sockets):
-    '''A greenlet function that reads from the websocket and updates the world'''
+
+def read_ws(ws):
+    """A greenlet function that reads from the websocket and updates the world"""
     try:
         while True:
             msg = ws.receive()
-            print(f'bruh {msg}')
+            print("WS RECV: %s" % msg)
             if msg:
-                packet :dict = json.loads(msg)
-                
-                data : dict
+                packet = json.loads(msg)
+
                 for entity, data in packet.items():
-                    for key, val in data.items():
-                        myWorld.update(entity, key, val)
+
+                    myWorld.set(entity, data)
             else:
                 break
     except Exception as e:
-        print('oh no!',e)
-    finally:
-        global gevents
-        if ws in gevents:
-            gevent.kill(gevents[ws])
+        print(e, "at line 127")
 
-@sockets.route('/subscribe')
+
+@sockets.route("/subscribe")
 def subscribe_socket(ws):
-    '''Fufill the websocket URL of /subscribe, every update notify the
-       websocket and read updates from the websocket '''
-    global gevents
+    """Fufill the websocket URL of /subscribe, every update notify the
+    websocket and read updates from the websocket"""
+
     g = gevent.spawn(read_ws, ws)
-    gevents[ws] = g
-    myWorld.add_set_listener(SocketListenerThing(ws))
+    client = SocketClient(ws)
+    myWorld.listeners.append(client)
+    try:
+        while True:
+            msg = client.queue.get()
+            ws.send(msg)
+    except Exception as e:
+        print(e, "at 143")
+    finally:
+        myWorld.listeners.remove(client)
+        gevent.kill(g)
 
 
 # I give this to you, this is how you get the raw body/data portion of a post in flask
 # this should come with flask but whatever, it's not my project.
 def flask_post_json():
-    '''Ah the joys of frameworks! They do so much work for you
-       that they get in the way of sane operation!'''
-    if (request.json != None):
+    """Ah the joys of frameworks! They do so much work for you
+    that they get in the way of sane operation!"""
+    if request.json != None:
         return request.json
-    elif (request.data != None and request.data.decode("utf8") != u''):
+    elif request.data != None and request.data.decode("utf8") != u"":
         return json.loads(request.data.decode("utf8"))
     else:
         return json.loads(request.form.keys()[0])
 
-@app.route("/entity/<entity>", methods=['POST','PUT'])
+
+@app.route("/entity/<entity>", methods=["POST", "PUT"])
 def update(entity):
-    '''update the entities via this interface'''
-    return None
+    """update the entities via this interface"""
+   
+    for key, val in flask_post_json().items():
+        print(key, val)
+        myWorld.update(entity, key, val)
+    return Response(json.dumps(myWorld.get(entity)),200)
+
 
 @app.route("/world", methods=['POST','GET'])    
 def world():
     '''you should probably return the world here'''
-    return None
+    
+    return Response(json.dumps(myWorld.world()), 200)
 
 @app.route("/entity/<entity>")    
 def get_entity(entity):
     '''This is the GET version of the entity interface, return a representation of the entity'''
-    return None
-
+    return Response(json.dumps(myWorld.get(entity)), 200 )
+    
 
 @app.route("/clear", methods=['POST','GET'])
 def clear():
     '''Clear the world out!'''
-    return None
-
+    myWorld.clear()
+    return Response("done", 200)
 
 
 if __name__ == "__main__":
-    ''' This doesn't work well anymore:
-        pip install gunicorn
-        and run
-        gunicorn -k flask_sockets.worker sockets:app
-    '''
-    app.run()
+    """This doesn't work well anymore:
+    pip install gunicorn
+    and run
+    gunicorn -k flask_sockets.worker sockets:app
+    """
+    app.run(port=8000)

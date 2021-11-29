@@ -40,7 +40,7 @@ import json
 
 world = dict()
 # set this to something sane 
-calls = 3000
+calls = 100
 # ugh there's too much output? Well drop calls down
 # calls = 100
 
@@ -58,6 +58,7 @@ class WorldClient(WebSocketClient):
         data = {'x':i,'y':i}
         world[entity] = data
         packet = { entity : data }
+        print(packet)
         self.send(json.dumps(packet))
         print("Sent %s" % entity)
 
@@ -70,6 +71,7 @@ class WorldClient(WebSocketClient):
         kcnt = 0
         for key in w:
             if (key in world):
+                print("checking", world[key],w[key])
                 assert world[key] == w[key]
             world[key] = w[key]
             kcnt += 1
@@ -96,7 +98,7 @@ if __name__ == '__main__':
         os.system("kill -9 $(lsof -t -i:8000)");
         os.system("bash run.sh &");
         print("Sleeping 3 seconds")
-        gevent.sleep(3)
+        gevent.sleep(1)
         ws = WorldClient('ws://127.0.0.1:8000/subscribe', protocols=['http-only', 'chat'])
         ws2 = WorldClient('ws://127.0.0.1:8000/subscribe', protocols=['http-only', 'chat'])
         ws.daemon = False
