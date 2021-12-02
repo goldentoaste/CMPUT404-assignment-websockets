@@ -45,6 +45,7 @@ class World:
         self.update_listeners(entity)
 
     def set(self, entity, data):
+        
         self.space[entity] = data
         self.update_listeners(entity)
 
@@ -76,6 +77,7 @@ class SocketClient:
         self.queue.put_nowait(item)
 
     def __call__(self, entity, data):
+        
         self.queue.put(json.dumps({entity: data}))
 
     # def __call__(self, entity , data ):
@@ -104,10 +106,10 @@ def read_ws(ws):
     try:
         while True:
             msg = ws.receive()
-            print("WS RECV: %s" % msg)
+            
             if msg:
                 packet = json.loads(msg)
-
+             
                 for entity, data in packet.items():
 
                     myWorld.set(entity, data)
@@ -127,7 +129,9 @@ def subscribe_socket(ws):
     myWorld.listeners.append(client)
     try:
         while True:
+
             msg = client.queue.get()
+         
             ws.send(msg)
     except Exception as e:
         print(e, "at 143")
